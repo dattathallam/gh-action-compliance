@@ -11,6 +11,30 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    # Step 0: ensure gh CLI is available (pre-installed on GitHub-hosted runners;
+    # install on bare self-hosted runners that don't have it)
+    - name: Ensure gh CLI
+      shell: bash
+      run: |
+        if command -v gh &>/dev/null; then
+          echo "gh CLI already present: $(gh --version | head -1)"
+        else
+          echo "gh CLI not found, installing for $RUNNER_OS..." >&2
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+              | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+            sudo apt-get update -q && sudo apt-get install -y gh
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install gh
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            choco install gh --yes
+          else
+            echo "Unsupported OS: $RUNNER_OS — skipping gh install" >&2
+          fi
+        fi
+
     # Step 1: scan _actions/, detect marketplace signals, POST to webhook
     - name: Scan third-party actions and report
       shell: bash
