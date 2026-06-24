@@ -53,9 +53,21 @@ runs:
                 repo=$(basename "$(dirname "$ref_dir")")
                 ref=$(basename "$ref_dir")
 
-                # Marketplace check: GET github.com/marketplace/actions/{repo} — 200 = listed
+                # Marketplace URL uses the action name slug, not the repo name.
+                # Read name: from the downloaded action.yml, slugify it, then check.
+                action_yml="$ref_dir/action.yml"
+                action_name=""
+                if [ -f "$action_yml" ]; then
+                  action_name=$(grep "^name:" "$action_yml" | head -1 \
+                    | sed "s/^name:[[:space:]]*//" | tr -d "'\""  )
+                fi
+                slug=$(echo "$action_name" \
+                  | tr '[:upper:]' '[:lower:]' \
+                  | sed 's/[^a-z0-9]/-/g' \
+                  | sed 's/-\{2,\}/-/g' \
+                  | sed 's/^-//;s/-$//')
                 marketplace_status=$(curl -s -o /dev/null -w "%{http_code}" \
-                  "https://github.com/marketplace/actions/$repo")
+                  "https://github.com/marketplace/actions/$slug")
                 if [[ "$marketplace_status" == "200" ]]; then
                   on_marketplace=true
                 else
@@ -106,9 +118,21 @@ runs:
                 repo=$(basename "$(dirname "$ref_dir")")
                 ref=$(basename "$ref_dir")
 
-                # Marketplace check: GET github.com/marketplace/actions/{repo} — 200 = listed
+                # Marketplace URL uses the action name slug, not the repo name.
+                # Read name: from the downloaded action.yml, slugify it, then check.
+                action_yml="$ref_dir/action.yml"
+                action_name=""
+                if [ -f "$action_yml" ]; then
+                  action_name=$(grep "^name:" "$action_yml" | head -1 \
+                    | sed "s/^name:[[:space:]]*//" | tr -d "'\""  )
+                fi
+                slug=$(echo "$action_name" \
+                  | tr '[:upper:]' '[:lower:]' \
+                  | sed 's/[^a-z0-9]/-/g' \
+                  | sed 's/-\{2,\}/-/g' \
+                  | sed 's/^-//;s/-$//')
                 marketplace_status=$(curl -s -o /dev/null -w "%{http_code}" \
-                  "https://github.com/marketplace/actions/$repo")
+                  "https://github.com/marketplace/actions/$slug")
                 if [[ "$marketplace_status" == "200" ]]; then
                   on_marketplace=true
                 else
