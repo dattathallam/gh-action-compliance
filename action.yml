@@ -1,0 +1,131 @@
+name: 'Compliance Scanner'
+description: 'Audits third-party OSS actions in use and reports them to a compliance webhook'
+inputs:
+  webhook-url:
+    description: 'Compliance webhook URL to POST scan results to'
+    required: true
+  github-token:
+    description: 'GitHub token for fetching release tags and repo topics'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: 'composite'
+  steps:
+    # Step 1: scan _actions/, detect marketplace signals, POST to webhook
+    - name: Scan third-party actions and report
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        ACTIONS_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions"
+        echo "Scanning $ACTIONS_DIR for third-party actions..."
+
+        actions_json=$(
+          find "$ACTIONS_DIR" -mindepth 3 -maxdepth 3 -type d \
+            | grep -v "^$ACTIONS_DIR/actions/" \
+            | while IFS= read -r ref_dir; do
+                owner=$(basename "$(dirname "$(dirname "$ref_dir")")")
+                repo=$(basename "$(dirname "$ref_dir")")
+                ref=$(basename "$ref_dir")
+
+                # Marketplace signal 1: branding: key in action.yml (no API call needed)
+                action_yml="$ref_dir/action.yml"
+                if [ -f "$action_yml" ] && grep -q "^branding:" "$action_yml"; then
+                  marketplace_likely=true
+                else
+                  marketplace_likely=false
+                fi
+
+                # Marketplace signal 2: github-actions topic on the repo
+                topics=$(gh api "repos/$owner/$repo/topics" 2>/dev/null \
+                  | jq -r '(.names // []) | join(",")' 2>/dev/null || echo "")
+                if echo "$topics" | grep -q "github-actions"; then
+                  marketplace_topic=true
+                else
+                  marketplace_topic=false
+                fi
+
+                echo "  $owner/$repo@$ref  marketplace_likely=$marketplace_likely  marketplace_topic=$marketplace_topic" >&2
+
+                jq -n \
+                  --arg owner "$owner" \
+                  --arg repo "$repo" \
+                  --arg ref "$ref" \
+                  --argjson marketplace_likely "$marketplace_likely" \
+                  --argjson marketplace_topic "$marketplace_topic" \
+                  '{owner:$owner,repo:$repo,ref:$ref,marketplace_likely:$marketplace_likely,marketplace_topic:$marketplace_topic}'
+              done \
+            | jq -s '.'
+        )
+
+        payload=$(jq -n \
+          --arg event "compliance_scan" \
+          --arg run_id "$GITHUB_RUN_ID" \
+          --arg repository "$GITHUB_REPOSITORY" \
+          --argjson actions "$actions_json" \
+          '{event:$event,run_id:$run_id,repository:$repository,third_party_actions:$actions}')
+
+        echo "--- Payload ---"
+        echo "$payload" | jq .
+        curl -s -o /dev/null -w "Webhook response: %{http_code}\n" \
+          -X POST "$WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          -d "$payload"
+
+    # Step 2: fetch release tags for each third-party action, POST to webhook
+    - name: Fetch release tags and report
+      shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        ACTIONS_DIR="$(dirname "$RUNNER_WORKSPACE")/_actions"
+        echo "Fetching release tags for third-party actions..."
+
+        actions_json=$(
+          find "$ACTIONS_DIR" -mindepth 3 -maxdepth 3 -type d \
+            | grep -v "^$ACTIONS_DIR/actions/" \
+            | while IFS= read -r ref_dir; do
+                owner=$(basename "$(dirname "$(dirname "$ref_dir")")")
+                repo=$(basename "$(dirname "$ref_dir")")
+                ref=$(basename "$ref_dir")
+
+                action_yml="$ref_dir/action.yml"
+                if [ -f "$action_yml" ] && grep -q "^branding:" "$action_yml"; then
+                  marketplace_likely=true
+                else
+                  marketplace_likely=false
+                fi
+
+                # Fetch releases sorted by published_at descending
+                releases=$(gh api "repos/$owner/$repo/releases" --paginate 2>/dev/null \
+                  | jq '[.[] | {tag:.tag_name,published_at:.published_at,prerelease:.prerelease}] | sort_by(.published_at) | reverse' \
+                  2>/dev/null || echo "[]")
+
+                echo "  $owner/$repo@$ref — $(echo "$releases" | jq length) release(s)" >&2
+
+                jq -n \
+                  --arg owner "$owner" \
+                  --arg repo "$repo" \
+                  --arg ref "$ref" \
+                  --argjson marketplace_likely "$marketplace_likely" \
+                  --argjson releases "$releases" \
+                  '{owner:$owner,repo:$repo,ref_in_use:$ref,marketplace_likely:$marketplace_likely,releases:$releases}'
+              done \
+            | jq -s '.'
+        )
+
+        payload=$(jq -n \
+          --arg event "compliance_releases" \
+          --arg run_id "$GITHUB_RUN_ID" \
+          --arg repository "$GITHUB_REPOSITORY" \
+          --argjson actions "$actions_json" \
+          '{event:$event,run_id:$run_id,repository:$repository,third_party_actions:$actions}')
+
+        echo "--- Payload ---"
+        echo "$payload" | jq .
+        curl -s -o /dev/null -w "Webhook response: %{http_code}\n" \
+          -X POST "$WEBHOOK_URL" \
+          -H "Content-Type: application/json" \
+          -d "$payload"
